@@ -1,35 +1,37 @@
-import { Client, Users } from 'node-appwrite';
+import { HfInference } from '@huggingface/inference';
+import AppwriteService from './appwrite.js';
 
-// This Appwrite function will be executed every time your function is triggered
 export default async ({ req, res, log, error }) => {
-  // You can use the Appwrite SDK to interact with other services
-  // For this example, we're using the Users service
-  const client = new Client()
-    .setEndpoint(process.env.APPWRITE_FUNCTION_API_ENDPOINT)
-    .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
-    .setKey(req.headers['x-appwrite-key'] ?? '');
-  const users = new Users(client);
+  const databaseId = process.env.APPWRITE_DATABASE_ID ?? 'ai';
+  const collectionId = process.env.APPWRITE_COLLECTION_ID ?? 'speech_recognition';
+  const bucketId = process.env.APPWRITE_BUCKET_ID ?? 'speech_recognition';
 
-  try {
-    const response = await users.list();
-    // Log messages and errors to the Appwrite Console
-    // These logs won't be seen by your end users
-    log(`Total users: ${response.total}`);
-  } catch(err) {
-    error("Could not list users: " + err.message);
+  let fileId = req.body.$id || req.body.fileId;
+
+  if (!fileId) {
+    return res.text('Bad request', 400);
   }
 
-  // The req object contains the request data
-  if (req.path === "/ping") {
-    // Use res object to respond with text(), json(), or binary()
-    // Don't forget to return a response!
-    return res.text("Pong");
+  if (
+    req.body.bucketId &&
+    req.body.bucketId != bucketId
+  ) {
+    return res.text('Bad request', 400);
   }
 
-  return res.json({
-    motto: "Build like a team of hundreds_",
-    learn: "https://appwrite.io/docs",
-    connect: "https://appwrite.io/discord",
-    getInspired: "https://builtwith.appwrite.io",
+  const appwrite = new AppwriteService();
+
+  const file = await appwrite.getFile(bucketId, fileId);
+
+  const hf = new HfInference(process.env.HUGGING_FACE_API_KEY);
+
+  const result = await hf.automaticSpeechRecognition({
+    data: file,
+    model: 'openai/whisper-large-v3',
   });
+
+  await appwrite.createRecognitionEntry(databaseId, collectionId, fileId, result.text);
+
+  log('Audio ' + fileId + ' recognised', result.text);
+  return res.json({ text: result.text });
 };
